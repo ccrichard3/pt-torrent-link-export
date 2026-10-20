@@ -1,0 +1,25 @@
+{
+  "name": "pt-torrent-link-export",
+  "version": "1.0.0",
+  "description": "Userscript: export PT torrent direct links with credentials, multi-engine (Gazelle/NexusPHP/UNIT3D)",
+  "scripts": {
+    "test": "node test/run-tests.mjs"
+  },
+  "keywords": [
+    "userscript",
+    "tampermonkey",
+    "pt",
+    "private-tracker",
+    "gazelle",
+    "nexusphp",
+    "unit3d",
+    "torrent"
+  ],
+  "author": "ccrichard3",
+  "license": "MIT",
+  "type": "commonjs",
+  "private": true,
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}
