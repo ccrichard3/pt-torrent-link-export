@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PT 种子直链导出 (Gazelle / NexusPHP / UNIT3D)
 // @namespace    local.pt.torrent-link-export
-// @version      1.0.1
+// @version      1.1.0
 // @description  在 PT 站列表/做种页一键导出带凭据的种子直链，支持多引擎自动识别、分页抓取、可选免费令牌
 // @author       ccrichard3
 // @license      MIT
@@ -141,8 +141,9 @@
         return g ? g.textContent.trim().replace(/\s+/g, ' ') : '';
       },
       secretRe: {
-        authkey: /authkey=([a-f0-9]{16,64})/i,
-        torrent_pass: /torrent_pass=([a-f0-9]{16,64})/i,
+        authkey: /authkey=([A-Za-z0-9]{16,64})/i,
+        // 不限定十六进制：HappyFappy 这类站的 torrent_pass 是 base32 风格
+        torrent_pass: /torrent_pass=([A-Za-z0-9]{16,64})/i,
       },
       // RSS 链接也长成 action=download&id=N，必须要求锚点在列表行内，否则会混进假种子
       requireRowContext: true,
@@ -198,36 +199,65 @@
       perPageParam: 'perPage',
       perPageValue: '100',
       isDownloadUrl(u) {
-        // /torrent/download/auto.<id>.<rsskey>（BHD）
-        // /torrents/download/<id>（标准 UNIT3D）
-        return /\/torrents?\/download\//.test(u.pathname);
+        // /torrents/download/<id>（标准 UNIT3D / ClearJav / BitPorn）
+        // /torrent/download/auto.<id>.<rsskey>（BHD 旧式 RSS）
+        // /download/<slug>.<id>（BHD 现行）
+        return /\/torrents?\/download\//.test(u.pathname) ||
+               /\/download\/[^/]+\.\d+$/.test(u.pathname);
       },
       buildBase() {
-        return new URL('/torrent/download/', location.origin);
+        return new URL('/torrents/download/', location.origin);
       },
-      // rsskey 在路径里：/torrent/download/auto.<id>.<rsskey>
-      compose(u, id, sec, useToken, tokenParam) {
-        u.pathname = `/torrent/download/auto.${id}.${sec.rsskey || ''}`;
+      /* 关键差异：多数 UNIT3D 站的列表链接里【没有】凭据，下载靠会话 cookie。
+       * 此时必须原样保留站方给的链接（可能带 slug），不能自己拼。 */
+      compose(u, id, sec, useToken, tokenParam, original) {
+        const hasRsskeyInPath = original && /auto\.\d+\.[A-Za-z0-9_-]{16,}/.test(original.pathname);
+
+        if (original) {
+          if (hasRsskeyInPath) {
+            // 已经是自包含的 RSS 链接，原样用
+            u.pathname = original.pathname;
+            u.search = original.search;
+          } else if (sec.rsskey) {
+            // 站点支持 rsskey 形式，改写成自包含链接（可分享）
+            u.pathname = `/torrent/download/auto.${id}.${sec.rsskey}`;
+          } else {
+            // 无 rsskey：保留站方原始链接，靠 cookie 鉴权
+            u.pathname = original.pathname;
+            u.search = original.search;
+          }
+        } else {
+          u.pathname = sec.rsskey
+            ? `/torrent/download/auto.${id}.${sec.rsskey}`
+            : `/torrents/download/${id}`;
+        }
+
         if (useToken && tokenParam) u.searchParams.set(tokenParam, '1');
         return u;
       },
-      // BHD 是 Laravel 自建站，行不一定是 tr；Livewire 站用 [wire:key]
-      rowSelector: 'tr, [wire\\:key], [data-torrent-id]',
+      // BHD 是 Laravel 自建站（tr[id="torrentposterNNN"]），Livewire 站用 data-torrent-id
+      rowSelector: 'tr[data-torrent-id], tr[wire\\:key], tr[id^="torrentposter"], [wire\\:key]',
       rowIdOf(tr) {
         const direct = tr.getAttribute && tr.getAttribute('data-torrent-id');
         if (/^\d+$/.test(direct || '')) return direct;
 
+        // BHD: <tr id="torrentposter604124">
+        const m0 = /^torrentposter(\d+)$/.exec(tr.id || '');
+        if (m0) return m0[1];
+
         const a = tr.querySelector(
           'a[href*="/torrent/download/"], a[href*="/torrents/download/"], ' +
-          'a[href*="/torrent/"], a[href*="/torrents/"]'
+          'a[href*="/download/"], a[href*="/torrent/"], a[href*="/torrents/"]'
         );
         if (a) {
           const href = a.getAttribute('href') || '';
-          // 下载链接：取 auto.<id> 或路径末尾的数字段
           const dl = /download\/(?:auto\.)?(\d+)/.exec(href);
           if (dl) return dl[1];
-          const det = /\/(?:torrent|torrents)\/(\d+)(?:[/?#]|$)/.exec(href);
-          if (det) return det[1];
+          // /download/<slug>.<id> 与 /torrents/<slug>.<id>
+          const slug = /\/(?:download|torrent|torrents)\/[^/]*?\.(\d+)(?:[/?#]|$)/.exec(href);
+          if (slug) return slug[1];
+          const plain = /\/(?:torrent|torrents)\/(\d+)(?:[/?#]|$)/.exec(href);
+          if (plain) return plain[1];
         }
 
         const cb = tr.querySelector('input[type="checkbox"][value]');
@@ -235,7 +265,10 @@
         return null;
       },
       rowNameOf(tr) {
-        const a = tr.querySelector('a[href*="/torrent/"], a[href*="/torrents/"]');
+        const a = tr.querySelector(
+          '.torrent-search--list__name a, .torrent-title a, ' +
+          'a[href*="/torrent/"], a[href*="/torrents/"]'
+        );
         if (a) return a.textContent.trim().replace(/\s+/g, ' ');
         const t = tr.querySelector('.torrent-name, .name, strong');
         return t ? t.textContent.trim().replace(/\s+/g, ' ') : '';
@@ -244,7 +277,7 @@
         // BHD 的 rsskey 是大小写混合的字母数字，不能限定十六进制
         rsskey: /(?:rsskey[=:\/]|rss\/)([A-Za-z0-9_-]{16,128})/i,
       },
-      requireRowContext: false,
+      requireRowContext: true,
     },
   };
 
@@ -437,9 +470,9 @@
     return ov.tokenParam !== undefined ? ov.tokenParam : engine.tokenParam;
   }
 
-  function buildUrl(engineKey, engine, id, sec, useToken) {
+  function buildUrl(engineKey, engine, id, sec, useToken, original) {
     const tokenParam = resolveTokenParam(engineKey, engine);
-    return engine.compose(engine.buildBase(), id, sec, useToken, tokenParam).href;
+    return engine.compose(engine.buildBase(), id, sec, useToken, tokenParam, original).href;
   }
 
   /* ============================================================
@@ -447,11 +480,16 @@
    * ============================================================ */
 
   function extractFromDoc(doc, base, engineKey, engine, sec) {
+    // id -> { name, original }；original 是站方给的原始 URL 对象（可能含 slug / 无凭据）
     const found = new Map();
-    const put = (id, name) => {
+    const put = (id, name, original) => {
       if (!/^\d+$/.test(String(id))) return;
       const prev = found.get(String(id));
-      if (prev === undefined || (!prev && name)) found.set(String(id), name || '');
+      if (prev === undefined) found.set(String(id), { name: name || '', original: original || null });
+      else {
+        if (!prev.name && name) prev.name = name;
+        if (!prev.original && original) prev.original = original;
+      }
     };
 
     // 路径 A：页面里已有的真实下载链接（保留站方原始参数，最稳）
@@ -465,22 +503,26 @@
       if (engine.requireRowContext && !tr) return;
 
       let id = null;
-      if (engineKey === 'gazelle') id = u.searchParams.get('id');
-      else if (engineKey === 'nexusphp') id = u.searchParams.get('id');
-      else {
-        const m = /(?:auto\.)?(\d+)(?:\.|$|\/)/.exec(u.pathname.split('/').pop() || '');
-        id = m ? m[1] : null;
+      if (engineKey === 'gazelle' || engineKey === 'nexusphp') {
+        id = u.searchParams.get('id');
+      } else {
+        // UNIT3D: /torrents/download/<id>、/download/<slug>.<id>、/torrent/download/auto.<id>.<key>
+        const last = u.pathname.split('/').pop() || '';
+        const slug = /\.(\d+)$/.exec(last);
+        const auto = /auto\.(\d+)\./.exec(u.pathname);
+        const plain = /^(\d+)$/.exec(last);
+        id = (slug && slug[1]) || (auto && auto[1]) || (plain && plain[1]) || null;
       }
       if (!/^\d+$/.test(id || '')) return;
 
-      put(id, tr ? engine.rowNameOf(tr) : '');
+      put(id, tr ? engine.rowNameOf(tr) : '', u);
     });
 
-    // 路径 B：行元素本身带 id（Gazelle 的 tr[id="torrentNNN"]）
+    // 路径 B：行元素本身带 id（Gazelle 的 tr[id="torrentNNN"]、UNIT3D 的 data-torrent-id）
     if (!found.size) {
       doc.querySelectorAll(engine.rowSelector).forEach((tr) => {
         const id = engine.rowIdOf(tr);
-        if (id) put(id, engine.rowNameOf(tr));
+        if (id) put(id, engine.rowNameOf(tr), null);
       });
     }
 
@@ -489,12 +531,12 @@
       doc.querySelectorAll('input[type="checkbox"][name^="torrents"], input[type="checkbox"][value]').forEach((c) => {
         if (/^\d+$/.test(c.value || '')) {
           const tr = c.closest('tr') || c.closest('[wire\\:key]');
-          put(c.value, tr ? engine.rowNameOf(tr) : '');
+          put(c.value, tr ? engine.rowNameOf(tr) : '', null);
         }
       });
     }
 
-    return [...found.entries()].map(([id, name]) => ({ id, name }));
+    return [...found.entries()].map(([id, v]) => ({ id, name: v.name, original: v.original }));
   }
 
   function maxPageOf(doc, base) {
@@ -578,7 +620,7 @@
 
     const items = [...seen.values()].map((it) => ({
       ...it,
-      url: buildUrl(engineKey, engine, it.id, creds.sec, opts.useToken),
+      url: buildUrl(engineKey, engine, it.id, creds.sec, opts.useToken, it.original),
     }));
 
     return { items, creds };

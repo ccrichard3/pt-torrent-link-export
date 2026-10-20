@@ -131,3 +131,22 @@ MIT
   <source media="(prefers-color-scheme: light)" srcset="traffic/views.svg" />
   <img alt="使用趋势" src="traffic/views.svg" />
 </picture>
+
+## 关于「链接里有没有凭据」
+
+不同站的下载链接差别很大，这直接决定导出的链接**能不能分享给别人**：
+
+| 站 | 链接形态 | 凭据 | 能分享吗 |
+|---|---|---|---|
+| Gazelle（DIC/HappyFappy 等） | `?action=download&id=..&authkey=..&torrent_pass=..` | URL 内 | ✅ 可离线下载 |
+| NexusPHP（PterClub 等） | `download.php?id=..&passkey=..` | URL 内 | ✅ 可离线下载 |
+| UNIT3D / BHD / ClearJav / BitPorn | `/torrents/download/<id>`、`/download/<slug>.<id>` | **仅会话 cookie** | ❌ 只对你自己的浏览器有效 |
+
+后一类的链接打开时靠 `beyondhd_session` 之类的 cookie 鉴权，**没有可嵌入的密钥**。所以：
+
+- 这些链接复制到别的浏览器 / 别的机器 → 会跳到登录页
+- 想分享只能拿到 `rsskey`（BHD 在 `/rss` 页面，部分 UNIT3D 站在个人设置里），拼成
+  `/torrent/download/auto.<id>.<rsskey>` 形式
+- 脚本会自动尝试去 `/rss` 探测一次；取不到就如实提示「缺少 rsskey」，不会编造假链接
+
+ClearJav / BitPorn 这类站即使登录了也不暴露 rsskey，属于**无法生成可分享直链**的站点，只能导出自用。
