@@ -178,22 +178,24 @@ const nexusBig = `<html><body><table>
 }
 
 /* ============================================================
- * 3. UNIT3D (BeyondHD 形态)
+ * 3. UNIT3D / BHD 形态
  * ============================================================ */
 
-const RSSKEY = 'd'.repeat(32);
+// BHD 的 rsskey 是大小写混合字母数字，不是十六进制
+const RSSKEY = 'AbCdEfGh12345678XyZ';
+const HEX_RSSKEY = 'd'.repeat(32);
 
 const unitHtml = `<!doctype html><html><body>
 <div class="username">unituser</div>
-<a href="/rss/${RSSKEY}">rss</a>
+<a href="/rss/${HEX_RSSKEY}">rss</a>
 <table>
   <tr wire:key="torrent-7001">
     <td><a href="/torrents/7001">Unit Release One</a></td>
-    <td><a href="/torrent/download/auto.7001.${RSSKEY}">DL</a></td>
+    <td><a href="/torrent/download/auto.7001.${HEX_RSSKEY}">DL</a></td>
   </tr>
   <tr wire:key="torrent-7002">
     <td><a href="/torrents/7002">Unit Release Two</a></td>
-    <td><a href="/torrent/download/auto.7002.${RSSKEY}">DL</a></td>
+    <td><a href="/torrent/download/auto.7002.${HEX_RSSKEY}">DL</a></td>
   </tr>
 </table>
 </body></html>`;
@@ -214,6 +216,54 @@ const unitHtml = `<!doctype html><html><body>
   check('UNIT3D: 路径含 auto.<id>.<rsskey>',
     urls && urls.every((u) => /\/torrent\/download\/auto\.\d+\.[a-f0-9]+$/.test(u)), urls && urls[0]);
   check('UNIT3D: 不含 usetoken', urls && urls.every((u) => !u.includes('usetoken')));
+}
+
+/* 3b. BHD 真实形态：rsskey 大小写混合，列表页只有详情链接 + 勾选框 */
+{
+  const bhdHtml = `<!doctype html><html><body>
+<div class="username">bhduser</div>
+<a href="/rss/${RSSKEY}">RSS</a>
+<table>
+  <tr data-torrent-id="880001">
+    <td><a href="/torrent/880001">BHD Release One</a></td>
+    <td><input type="checkbox" value="880001"></td>
+  </tr>
+  <tr data-torrent-id="880002">
+    <td><a href="/torrent/880002">BHD Release Two</a></td>
+    <td><input type="checkbox" value="880002"></td>
+  </tr>
+</table>
+</body></html>`;
+
+  const w = runScript('https://beyond-hd.me/torrents', bhdHtml);
+  const panel = await clickExport(w);
+  const urls = panelUrls(w);
+
+  check('BHD: 导出成功', !!panel);
+  check('BHD: 2 条', urls && urls.length === 2, urls && `got ${urls && urls.length}`);
+  check('BHD: 大小写混合 rsskey 被正确提取',
+    urls && urls.every((u) => u.endsWith(`.${RSSKEY}`)), urls && urls[0]);
+  check('BHD: 路径形如 auto.<id>.<rsskey>',
+    urls && urls.every((u) => /\/torrent\/download\/auto\.\d+\.[A-Za-z0-9]+$/.test(u)), urls && urls[0]);
+}
+
+/* 3c. 列表页不含 rsskey 时，应从 /rss 页面补全 */
+{
+  const listHtml = `<!doctype html><html><body>
+<div class="username">bhduser</div>
+<table>
+  <tr data-torrent-id="880003"><td><a href="/torrent/880003">No Key Here</a></td></tr>
+</table>
+</body></html>`;
+  const rssPage = `<html><body><a href="/rss/${RSSKEY}">rss</a></body></html>`;
+
+  const w = runScript('https://beyond-hd.me/torrents', listHtml, {
+    fetchPages: { '/rss': rssPage },
+  });
+  const panel = await clickExport(w);
+  const urls = panelUrls(w);
+
+  check('BHD: 缺 rsskey 时从 /rss 补全', urls && urls[0] && urls[0].endsWith(`.${RSSKEY}`), urls && urls[0]);
 }
 
 /* ============================================================

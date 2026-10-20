@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PT 种子直链导出 (Gazelle / NexusPHP / UNIT3D)
 // @namespace    local.pt.torrent-link-export
-// @version      1.0.0
+// @version      1.0.1
 // @description  在 PT 站列表/做种页一键导出带凭据的种子直链，支持多引擎自动识别、分页抓取、可选免费令牌
 // @author       ccrichard3
 // @license      MIT
@@ -198,35 +198,51 @@
       perPageParam: 'perPage',
       perPageValue: '100',
       isDownloadUrl(u) {
+        // /torrent/download/auto.<id>.<rsskey>（BHD）
+        // /torrents/download/<id>（标准 UNIT3D）
         return /\/torrents?\/download\//.test(u.pathname);
       },
       buildBase() {
         return new URL('/torrent/download/', location.origin);
       },
-      // UNIT3D 把 rsskey 拼在路径里：/torrent/download/auto.<id>.<rsskey>
+      // rsskey 在路径里：/torrent/download/auto.<id>.<rsskey>
       compose(u, id, sec, useToken, tokenParam) {
         u.pathname = `/torrent/download/auto.${id}.${sec.rsskey || ''}`;
-        // UNIT3D 的免费令牌走 POST，URL 参数无效；tokenParam 为 null 时忽略
         if (useToken && tokenParam) u.searchParams.set(tokenParam, '1');
         return u;
       },
-      rowSelector: 'tr, [wire\\:key]',
+      // BHD 是 Laravel 自建站，行不一定是 tr；Livewire 站用 [wire:key]
+      rowSelector: 'tr, [wire\\:key], [data-torrent-id]',
       rowIdOf(tr) {
-        const a = tr.querySelector('a[href*="/torrent/"], a[href*="/torrents/"]');
+        const direct = tr.getAttribute && tr.getAttribute('data-torrent-id');
+        if (/^\d+$/.test(direct || '')) return direct;
+
+        const a = tr.querySelector(
+          'a[href*="/torrent/download/"], a[href*="/torrents/download/"], ' +
+          'a[href*="/torrent/"], a[href*="/torrents/"]'
+        );
         if (a) {
-          const m = /\/(?:torrent|torrents)\/(?:download\/)?(?:auto\.)?(\d+)/.exec(a.getAttribute('href') || '');
-          if (m) return m[1];
+          const href = a.getAttribute('href') || '';
+          // 下载链接：取 auto.<id> 或路径末尾的数字段
+          const dl = /download\/(?:auto\.)?(\d+)/.exec(href);
+          if (dl) return dl[1];
+          const det = /\/(?:torrent|torrents)\/(\d+)(?:[/?#]|$)/.exec(href);
+          if (det) return det[1];
         }
+
         const cb = tr.querySelector('input[type="checkbox"][value]');
         if (cb && /^\d+$/.test(cb.value)) return cb.value;
         return null;
       },
       rowNameOf(tr) {
         const a = tr.querySelector('a[href*="/torrent/"], a[href*="/torrents/"]');
-        return a ? a.textContent.trim().replace(/\s+/g, ' ') : '';
+        if (a) return a.textContent.trim().replace(/\s+/g, ' ');
+        const t = tr.querySelector('.torrent-name, .name, strong');
+        return t ? t.textContent.trim().replace(/\s+/g, ' ') : '';
       },
       secretRe: {
-        rsskey: /(?:rsskey[=:\/]|rss\/)([a-f0-9]{16,64})/i,
+        // BHD 的 rsskey 是大小写混合的字母数字，不能限定十六进制
+        rsskey: /(?:rsskey[=:\/]|rss\/)([A-Za-z0-9_-]{16,128})/i,
       },
       requireRowContext: false,
     },
@@ -369,6 +385,42 @@
       sec,
       source: hasAnySecret(pageSec) ? 'page' : (fromCache ? 'cache' : 'none'),
     };
+  }
+
+  /* 页面和缓存里都拿不到凭据时，去站内几个已知位置捞一次。
+   * BHD 的列表页不渲染 rsskey，只在 RSS / 设置页里出现。 */
+  const CRED_PATHS = {
+    unit3d: ['/rss', '/user/settings', '/settings', '/users/settings'],
+    nexusphp: ['/getrss.php', '/usercp.php?action=personal', '/torrents.php?type=seeding'],
+    gazelle: ['/torrents.php?action=download&id=1', '/user.php?action=rss', '/usercp.php?action=personal'],
+  };
+
+  async function discoverCredentials(engineKey, engine, sec) {
+    const missing = engine.credKeys.filter((k) => !sec[k]);
+    if (!missing.length) return sec;
+
+    const paths = CRED_PATHS[engineKey] || [];
+    for (const p of paths) {
+      try {
+        const r = await fetch(p, { credentials: 'include' });
+        if (!r.ok) continue;
+        const found = readSecretsByEngine(engine, await r.text());
+        for (const k of missing) {
+          if (found[k] && !sec[k]) {
+            sec[k] = found[k];
+            const account = detectAccount();
+            if (typeof GM_setValue === 'function') {
+              GM_setValue(credScope(engineKey, account.id) + k, found[k]);
+            }
+            console.info(`[PTLE] ${k} 从 ${p} 补全`);
+          }
+        }
+        if (engine.credKeys.every((k) => sec[k])) break;
+      } catch (e) {
+        console.warn('[PTLE] 探测', p, '失败', e);
+      }
+    }
+    return sec;
   }
 
   /* ============================================================
@@ -839,6 +891,10 @@
       btn.textContent = '采集中…';
       try {
         const opts = { allPages: allPages.chk.checked, useToken: useToken.chk.checked && !useToken.chk.disabled };
+        btn.textContent = '检查凭据…';
+        await discoverCredentials(engineKey, engine, ctx.creds.sec);
+        if (hasAnySecret(ctx.creds.sec)) ctx.creds.source = 'page';
+
         const { items, creds: c } = await collectAll(ctx, opts, (m) => { btn.textContent = m; });
 
         if (!items.length) {
@@ -847,12 +903,24 @@
             `引擎：${engine.label}\n` +
             `当前页：${location.pathname}${location.search}\n` +
             `账号：${c.name || '未识别'}\n` +
-            `${credSummary(engineKey, engine, c)}\n\n` +
+            `${credSummary(engineKey, engine, c)}\n` +
+            `识别到的行元素：${document.querySelectorAll(engine.rowSelector).length}\n` +
+            `页面内下载链接：${document.querySelectorAll('a[href*="download"]').length}\n\n` +
             '若列表是异步渲染，等页面加载完再点。\n' +
             '仍为空请把 F12 Console 里 [PTLE] 开头的输出发我。'
           );
           return;
         }
+
+        const missing = engine.credKeys.filter((k) => !c.sec[k]);
+        if (missing.length) {
+          alert(
+            `已找到 ${items.length} 条种子，但缺少 ${missing.join(' / ')}。\n\n` +
+            '导出的链接不完整，无法直接下载。\n' +
+            '请确认已登录，并打开 RSS 页面后再试一次。'
+          );
+        }
+
         showPanel(items, opts, ctx);
       } catch (e) {
         alert('导出失败：' + e.message);
