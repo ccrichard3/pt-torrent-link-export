@@ -10,7 +10,9 @@
 |---|---|---|---|
 | **Gazelle** | `torrents.php?action=download&id=<id>&authkey=..&torrent_pass=..` | `authkey` + `torrent_pass` | `usetoken=1` |
 | **NexusPHP** | `download.php?id=<id>&passkey=..` | `passkey` | `usetoken=1` |
-| **UNIT3D** | `/torrent/download/auto.<id>.<rsskey>` | `rsskey` | 无（走 POST，URL 不支持） |
+| **UNIT3D / BHD** | `/torrent/download/auto.<id>.<rsskey>` | `rsskey` | 无（走 POST，URL 不支持） |
+
+BHD 的 `rsskey` 是**大小写混合字母数字**，不是十六进制；列表页往往不渲染它，脚本会自动去 `/rss`、`/user/settings` 等位置补全一次。
 
 ## 安装
 
