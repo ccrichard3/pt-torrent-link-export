@@ -2,6 +2,8 @@
 
 油猴脚本：在 PT 站列表页 / 做种页一键导出带凭据的种子直链，支持全部分页，可选附加免费令牌参数。
 
+直接去 [Releases](https://github.com/ccrichard3/pt-torrent-link-export/releases) 下最新版即可。
+
 自动识别三种主流引擎，不依赖域名硬编码：
 
 | 引擎 | 下载地址形态 | 凭据 | 令牌参数 |
@@ -11,6 +13,12 @@
 | **UNIT3D** | `/torrent/download/auto.<id>.<rsskey>` | `rsskey` | 无（走 POST，URL 不支持） |
 
 ## 安装
+
+两种方式，任选其一：
+
+**从 Releases 装**（推荐）：去 [Releases](https://github.com/ccrichard3/pt-torrent-link-export/releases) 下载最新的 `pt-torrent-link-export.user.js`，Tampermonkey 会自动弹出安装页。
+
+**从源码装**：
 
 1. 装 [Tampermonkey](https://www.tampermonkey.net/)
 2. 打开 [`pt-torrent-link-export.user.js`](./pt-torrent-link-export.user.js) 的 raw 链接
@@ -113,3 +121,11 @@ node test/run-tests.mjs
 ## 许可
 
 MIT
+
+## 使用趋势
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="traffic/views-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="traffic/views.svg" />
+  <img alt="使用趋势" src="traffic/views.svg" />
+</picture>
